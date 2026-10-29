@@ -10,17 +10,22 @@
 
 // ESP32-S3 Custom I2C Pins
 #define SDA_PIN 8
-#define SCL_PIN 9
+#define SCL_PIN 9  
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // Touch sensor pin definition
 const int touchPin = 4; // TTP223 SIG connected to GPIO 4
 
-// Mood tracking variables
+// Mood and Lock tracking variables
 int lastTouchState = LOW;
 int currentMood = 0; // 0: Happy, 1: Angry, 2: Sad
+bool isLocked = false; // Tracks whether the mood is locked in place
 
+// Double-click timing variables
+unsigned long lastClickTime = 0;
+bool waitingForSecondClick = false;
+const unsigned long DOUBLE_CLICK_DELAY = 1000; // Window in milliseconds for a double-click
 
 const unsigned char faceHappy[] PROGMEM = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -261,29 +266,44 @@ void setup() {
 void loop() {
   // Read touch sensor state
   int currentTouchState = digitalRead(touchPin);
+  unsigned long currentTime = millis();
 
   // Detect a fresh touch (transition from LOW to HIGH)
   if (currentTouchState == HIGH && lastTouchState == LOW) {
-    currentMood = (currentMood + 1) % 3; // Cycles 0 -> 1 -> 2 -> back to 0
+    if (waitingForSecondClick && (currentTime - lastClickTime < DOUBLE_CLICK_DELAY)) {
+      // --- DOUBLE CLICK DETECTED: Toggle Lock State ---
+      isLocked = !isLocked;
+      waitingForSecondClick = false; // Cancel pending single click action
+      
+      Serial.println(isLocked ? "Mood LOCKED!" : "Mood UNLOCKED!");
+    } else {
+      // --- FIRST CLICK: Start timing window for a potential double-click ---
+      lastClickTime = currentTime;
+      waitingForSecondClick = true;
+    }
     delay(50); // Debounce delay
   }
   lastTouchState = currentTouchState;
 
+  // Check if the single-click timeout window has expired
+  if (waitingForSecondClick && (currentTime - lastClickTime > DOUBLE_CLICK_DELAY)) {
+    waitingForSecondClick = false;
+    
+    // Only change mood on a single click if it is NOT locked
+    if (!isLocked) {
+      currentMood = (currentMood + 1) % 3; // Cycles 0 -> 1 -> 2 -> back to 0
+    }
+  }
+
   // Clear the display buffer
   display.clearDisplay();
 
-  // Draw the bitmap corresponding to the current mood
-  switch (currentMood) {
-    case 0:
-      // drawBitmap(X, Y, arrayName, width, height, color)
-      display.drawBitmap(0, 0, faceHappy, 128, 64, SSD1306_WHITE);
-      break;
-    case 1:
-      display.drawBitmap(0, 0, faceAngry, 128, 64, SSD1306_WHITE);
-      break;
-    case 2:
-      display.drawBitmap(0, 0, faceSad, 128, 64, SSD1306_WHITE);
-      break;
+  // Draw the current mood bitmap automatically using the array index
+  display.drawBitmap(0, 0, faces[currentMood], 128, 64, SSD1306_WHITE);
+
+  // If locked, draw a small visual indicator (tiny box in top-right corner)
+  if (isLocked) {
+    display.fillRect(120, 0, 8, 8, SSD1306_WHITE);
   }
 
   // Push buffer to the screen
